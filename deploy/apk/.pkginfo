@@ -1,0 +1,4 @@
+name = homed-custom-yeelight
+description = HOMEd Custom-Yeelight Service
+maintainer = u236 <mail@u236.org>
+depends = homed-qt

@@ -1,0 +1,6 @@
+#!/bin/sh
+
+/etc/init.d/homed-custom-yeelight stop
+/etc/init.d/homed-custom-yeelight disable
+
+exit 0

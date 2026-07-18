@@ -1,0 +1,14 @@
+{
+  "admin/homed":
+  {
+    "title": "HOMEd",
+    "action": {"type": "firstchild"},
+    "depends": {"acl": ["luci-app-homed-custom-yeelight"]},
+    "order": 60
+  },
+  "admin/homed/custom-yeelight":
+  {
+    "title": "Custom-Yeelight Service Configuration",
+    "action": {"type": "view", "path": "homed/custom-yeelight"}
+  }
+}

@@ -1,0 +1,11 @@
+[Unit]
+Description=HOMEd Custom-Yeelight Service
+
+[Service]
+ExecStart=/usr/bin/homed-custom-yeelight
+Environment=LD_LIBRARY_PATH=/usr/lib
+KillSignal=SIGTERM
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

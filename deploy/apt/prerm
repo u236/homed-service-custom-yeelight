@@ -1,0 +1,6 @@
+#!/bin/bash
+
+systemctl stop homed-custom-yeelight.service
+systemctl disable homed-custom-yeelight.service
+
+exit 0
