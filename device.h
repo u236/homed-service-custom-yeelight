@@ -108,12 +108,12 @@ private:
     void parseMessage(const QByteArray &message);
 
     void buildCapabilities(const QString &model, const QList <QString> &support);
-    void addLight(const QString &prefix, const QString &suffix, const QList <QString> &support);
+    void addLight(bool backlight, const QList <QString> &support);
 
     void parseProperties(const QMap <QString, QVariant> &data);
-    void mapProperties(const QString &prefix, const QString &suffix, const QMap <QString, QVariant> &data, QMap <QString, QVariant> &properties);
+    void mapProperties(bool backlight, const QMap <QString, QVariant> &data, QMap <QString, QVariant> &properties);
 
-    void controlLight(const QString &name, const QString &suffix, const QVariant &data);
+    void controlLight(const QString &name, bool backlight, const QVariant &data);
 
 private slots:
 

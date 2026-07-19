@@ -211,11 +211,11 @@ void DeviceObject::buildCapabilities(const QString &model, const QList <QString>
 
     if (m_background)
     {
-        addLight(QString(), "_1", support);
-        addLight("bg_", "_2", support);
+        addLight(false, support);
+        addLight(true, support);
     }
     else
-        addLight(QString(), QString(), support);
+        addLight(false, support);
 
     if (model.startsWith("ceil"))
     {
@@ -228,40 +228,39 @@ void DeviceObject::buildCapabilities(const QString &model, const QList <QString>
 }
 
 // NOT REVIEWED
-void DeviceObject::addLight(const QString &prefix, const QString &suffix, const QList <QString> &support)
+void DeviceObject::addLight(bool backlight, const QList <QString> &support)
 {
-    QString mode = prefix.isEmpty() ? "color_mode" : "bg_lmode";
     QJsonArray options;
 
-    m_poll.append(prefix.isEmpty() && m_background ? QString("main_power") : QString("%1power").arg(prefix));
+    m_poll.append(backlight ? "bg_power" : m_background ? "main_power" : "power");
 
-    if (support.contains(QString("%1set_bright").arg(prefix)))
+    if (support.contains(backlight ? "bg_set_bright" : "set_bright"))
     {
         options.append("level");
-        m_poll.append(QString("%1bright").arg(prefix));
+        m_poll.append(backlight ? "bg_bright" : "bright");
     }
 
-    if (support.contains(QString("%1set_rgb").arg(prefix)) || support.contains(QString("%1set_hsv").arg(prefix)))
+    if (support.contains(backlight ? "bg_set_rgb" : "set_rgb") || support.contains(backlight ? "bg_set_hsv" : "set_hsv"))
     {
         options.append("color");
-        m_poll.append(QString("%1rgb").arg(prefix));
-        m_poll.append(QString("%1hue").arg(prefix));
-        m_poll.append(QString("%1sat").arg(prefix));
-        m_poll.append(mode);
+        m_poll.append(backlight ? "bg_rgb" : "rgb");
+        m_poll.append(backlight ? "bg_hue" : "hue");
+        m_poll.append(backlight ? "bg_sat" : "sat");
+        m_poll.append(backlight ? "bg_lmode" : "color_mode");
     }
 
-    if (support.contains(QString("%1set_ct_abx").arg(prefix)))
+    if (support.contains(backlight ? "bg_set_ct_abx" : "set_ct_abx"))
     {
         options.append("colorTemperature");
-        m_poll.append(QString("%1ct").arg(prefix));
-        m_options.insert(QString("colorTemperature%1").arg(suffix), QJsonObject {{"min", COLOR_TEMPERATURE_MIN}, {"max", COLOR_TEMPERATURE_MAX}});
+        m_poll.append(backlight ? "bg_ct" : "ct");
+        m_options.insert(backlight ? "colorTemperature_1" : "colorTemperature", QJsonObject {{"min", COLOR_TEMPERATURE_MIN}, {"max", COLOR_TEMPERATURE_MAX}});
     }
 
     if (options.contains("color") && options.contains("colorTemperature"))
         options.append("colorMode");
 
-    m_exposes.append(QString("light%1").arg(suffix));
-    m_options.insert(QString("light%1").arg(suffix), options);
+    m_exposes.append(backlight ? "light_1" : "light");
+    m_options.insert(backlight ? "light_1" : "light", options);
 }
 
 // NOT REVIEWED
@@ -271,11 +270,11 @@ void DeviceObject::parseProperties(const QMap <QString, QVariant> &data)
 
     if (m_background)
     {
-        mapProperties(QString(), "_1", data, properties);
-        mapProperties("bg_", "_2", data, properties);
+        mapProperties(false, data, properties);
+        mapProperties(true, data, properties);
     }
     else
-        mapProperties(QString(), QString(), data, properties);
+        mapProperties(false, data, properties);
 
     if (m_ceiling)
     {
@@ -283,7 +282,7 @@ void DeviceObject::parseProperties(const QMap <QString, QVariant> &data)
             properties.insert("nightMode", data.value("active_mode").toInt() == 1);
 
         if (data.contains("active_bright"))
-            properties.insert(QString("level%1").arg(m_background ? "_1" : QString()), qRound(data.value("active_bright").toInt() * 255.0 / 100));
+            properties.insert("level", qRound(data.value("active_bright").toInt() * 255.0 / 100));
     }
 
     if (properties == m_properties)
@@ -294,58 +293,50 @@ void DeviceObject::parseProperties(const QMap <QString, QVariant> &data)
 }
 
 // NOT REVIEWED
-void DeviceObject::mapProperties(const QString &prefix, const QString &suffix, const QMap <QString, QVariant> &data, QMap <QString, QVariant> &properties)
+void DeviceObject::mapProperties(bool backlight, const QMap <QString, QVariant> &data, QMap <QString, QVariant> &properties)
 {
-    QString key = prefix.isEmpty() ? "color_mode" : "bg_lmode";
-    QString power = prefix.isEmpty() && m_background ? "main_power" : QString("%1power").arg(prefix);
+    QString power = backlight ? "bg_power" : m_background ? "main_power" : "power";
+    QString key = backlight ? "bg_lmode" : "color_mode";
     int mode = data.contains(key) ? data.value(key).toInt() : -1;
 
     if (data.contains(power))
-        properties.insert(QString("status%1").arg(suffix), data.value(power).toString() == "on" ? "on" : "off");
+        properties.insert(backlight ? "status_1" : "status", data.value(power).toString() == "on" ? "on" : "off");
 
-    if (data.contains(QString("%1bright").arg(prefix)))
-        properties.insert(QString("level%1").arg(suffix), qRound(data.value(QString("%1bright").arg(prefix)).toInt() * 255.0 / 100));
+    if (data.contains(backlight ? "bg_bright" : "bright"))
+        properties.insert(backlight ? "level_1" : "level", qRound(data.value(backlight ? "bg_bright" : "bright").toInt() * 255.0 / 100));
 
-    if (data.contains(QString("%1ct").arg(prefix)) && data.value(QString("%1ct").arg(prefix)).toInt() > 0)
-        properties.insert(QString("colorTemperature%1").arg(suffix), qRound(1000000.0 / data.value(QString("%1ct").arg(prefix)).toInt()));
+    if (data.contains(backlight ? "bg_ct" : "ct") && data.value(backlight ? "bg_ct" : "ct").toInt() > 0)
+        properties.insert(backlight ? "colorTemperature_1" : "colorTemperature", qRound(1000000.0 / data.value(backlight ? "bg_ct" : "ct").toInt()));
 
     if (mode != -1)
-        properties.insert(QString("colorMode%1").arg(suffix), mode != 2);
+        properties.insert(backlight ? "colorMode_1" : "colorMode", mode != 2);
 
     if (mode == 3)
     {
-        if (data.contains(QString("%1hue").arg(prefix)) && data.contains(QString("%1sat").arg(prefix)))
+        if (data.contains(backlight ? "bg_hue" : "hue") && data.contains(backlight ? "bg_sat" : "sat"))
         {
-            Color color = Color::fromHS(data.value(QString("%1hue").arg(prefix)).toDouble() / 360, data.value(QString("%1sat").arg(prefix)).toDouble() / 100);
-            properties.insert(QString("color%1").arg(suffix), QVariantList {qRound(color.r() * 255), qRound(color.g() * 255), qRound(color.b() * 255)});
+            Color color = Color::fromHS(data.value(backlight ? "bg_hue" : "hue").toDouble() / 360, data.value(backlight ? "bg_sat" : "sat").toDouble() / 100);
+            properties.insert(backlight ? "color_1" : "color", QVariantList {qRound(color.r() * 255), qRound(color.g() * 255), qRound(color.b() * 255)});
         }
     }
-    else if (data.contains(QString("%1rgb").arg(prefix)))
+    else if (data.contains(backlight ? "bg_rgb" : "rgb"))
     {
-        int rgb = data.value(QString("%1rgb").arg(prefix)).toInt();
-        properties.insert(QString("color%1").arg(suffix), QVariantList {rgb >> 16 & 0xFF, rgb >> 8 & 0xFF, rgb & 0xFF});
+        int rgb = data.value(backlight ? "bg_rgb" : "rgb").toInt();
+        properties.insert(backlight ? "color_1" : "color", QVariantList {rgb >> 16 & 0xFF, rgb >> 8 & 0xFF, rgb & 0xFF});
     }
 }
 
 // NOT REVIEWED
 void DeviceObject::action(const QString &name, const QVariant &data)
 {
-    QRegExp regExp("_(\\d+)$");
+    bool backlight = name.endsWith("_1");
 
-    if (regExp.indexIn(name) >= 0)
-    {
-        controlLight(name.left(name.length() - regExp.cap(0).length()), regExp.cap(0), data);
-        return;
-    }
-
-    controlLight(name, QString(), data);
+    controlLight(backlight ? name.left(name.length() - 2) : name, backlight, data);
 }
 
 // NOT REVIEWED
-void DeviceObject::controlLight(const QString &name, const QString &suffix, const QVariant &data)
+void DeviceObject::controlLight(const QString &name, bool backlight, const QVariant &data)
 {
-    QString prefix = suffix == "_2" ? "bg_" : QString();
-
     if (!m_connected)
         return;
 
@@ -355,14 +346,14 @@ void DeviceObject::controlLight(const QString &name, const QString &suffix, cons
 
         if (status == "toggle")
         {
-            sendCommand(QString("%1toggle").arg(prefix));
+            sendCommand(backlight ? "bg_toggle" : "toggle");
             return;
         }
 
         if (status != "on" && status != "off")
             return;
 
-        sendCommand(QString("%1set_power").arg(prefix), status);
+        sendCommand(backlight ? "bg_set_power" : "set_power", status);
         return;
     }
 
@@ -372,13 +363,13 @@ void DeviceObject::controlLight(const QString &name, const QString &suffix, cons
         return;
     }
 
-    if (m_properties.value(QString("status%1").arg(suffix)).toString() != "on")
-        sendCommand(QString("%1set_power").arg(prefix), "on");
+    if (m_properties.value(backlight ? "status_1" : "status").toString() != "on")
+        sendCommand(backlight ? "bg_set_power" : "set_power", "on");
 
     if (name == "level")
     {
         int bright = qRound(data.toInt() * 100.0 / 255);
-        sendCommand(QString("%1set_bright").arg(prefix), bright < 1 ? 1 : bright > 100 ? 100 : bright);
+        sendCommand(backlight ? "bg_set_bright" : "set_bright", bright < 1 ? 1 : bright > 100 ? 100 : bright);
     }
     else if (name == "color")
     {
@@ -389,7 +380,7 @@ void DeviceObject::controlLight(const QString &name, const QString &suffix, cons
             return;
 
         rgb = list.at(0).toInt() << 16 | list.at(1).toInt() << 8 | list.at(2).toInt();
-        sendCommand(QString("%1set_rgb").arg(prefix), rgb ? rgb : 1);
+        sendCommand(backlight ? "bg_set_rgb" : "set_rgb", rgb ? rgb : 1);
     }
     else if (name == "colorTemperature")
     {
@@ -399,7 +390,7 @@ void DeviceObject::controlLight(const QString &name, const QString &suffix, cons
             return;
 
         kelvin = qRound(1000000.0 / mired);
-        sendCommand(QString("%1set_ct_abx").arg(prefix), kelvin < 1700 ? 1700 : kelvin > 6500 ? 6500 : kelvin);
+        sendCommand(backlight ? "bg_set_ct_abx" : "set_ct_abx", kelvin < 1700 ? 1700 : kelvin > 6500 ? 6500 : kelvin);
     }
 }
 
