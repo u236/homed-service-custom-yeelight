@@ -1,18 +1,17 @@
+#include <netinet/tcp.h>
 #include <QJsonDocument>
-#include <QRegExp>
-#include <QtMath>
 #include "color.h"
 #include "device.h"
 #include "logger.h"
 
-DeviceObject::DeviceObject(const QString &address, const QString &id, bool debug) : QObject(nullptr), m_id(id), m_name(id), m_debug(debug), m_probe(new QUdpSocket(this)), m_socket(new QTcpSocket(this)), m_resetTimer(new QTimer(this)), m_updateTimer(new QTimer(this)), m_address(QHostAddress(address)), m_port(CONTROL_PORT), m_connected(false), m_sequence(1), m_availability(Availability::Unknown), m_lastSeen(QDateTime::currentMSecsSinceEpoch()), m_ready(false), m_background(false), m_ceiling(false), m_published(false)
+DeviceObject::DeviceObject(const QString &address, const QString &id, bool debug) : QObject(nullptr), m_id(id), m_name(id), m_debug(debug), m_resetTimer(new QTimer(this)), m_updateTimer(new QTimer(this)), m_tcp(new QTcpSocket(this)), m_udp(new QUdpSocket(this)), m_address(QHostAddress(address)), m_port(CONTROL_PORT), m_connected(false), m_sequence(1), m_background(false), m_ceiling(false), m_ready(false), m_published(false), m_availability(Availability::Unknown), m_lastSeen(QDateTime::currentMSecsSinceEpoch())
 {
-    connect(m_probe, &QUdpSocket::readyRead, this, &DeviceObject::readyRead);
+    connect(m_tcp, &QTcpSocket::errorOccurred, this, &DeviceObject::socketError);
+    connect(m_tcp, &QTcpSocket::connected, this, &DeviceObject::socketConnected);
+    connect(m_tcp, &QTcpSocket::disconnected, this, &DeviceObject::socketDisconnected);
+    connect(m_tcp, &QTcpSocket::readyRead, this, &DeviceObject::readyRead);
 
-    connect(m_socket, &QTcpSocket::errorOccurred, this, &DeviceObject::socketError);
-    connect(m_socket, &QTcpSocket::connected, this, &DeviceObject::socketConnected);
-    connect(m_socket, &QTcpSocket::disconnected, this, &DeviceObject::socketDisconnected);
-    connect(m_socket, &QTcpSocket::readyRead, this, &DeviceObject::readyRead);
+    connect(m_udp, &QUdpSocket::readyRead, this, &DeviceObject::readyRead);
 
     connect(m_resetTimer, &QTimer::timeout, this, &DeviceObject::reset);
     connect(m_updateTimer, &QTimer::timeout, this, &DeviceObject::update);
@@ -24,29 +23,33 @@ DeviceObject::DeviceObject(const QString &address, const QString &id, bool debug
 DeviceObject::~DeviceObject(void)
 {
     if (m_connected)
-        m_socket->disconnectFromHost();
+        m_tcp->disconnectFromHost();
 }
 
 void DeviceObject::init(void)
 {
+    QString request = QString("M-SEARCH * HTTP/1.1\r\nHOST: %1:1982\r\nMAN: \"ssdp:discover\"\r\nST: wifi_bulb\r\n\r\n").arg(MULTICAST_ADDRESS);
+
     if (m_address.isNull())
     {
         logWarning << this << "has invalid address";
         return;
     }
 
-    if (m_socket->state() != QAbstractSocket::UnconnectedState)
+    if (m_tcp->state() != QAbstractSocket::UnconnectedState)
     {
-        m_socket->abort();
+        m_tcp->abort();
         m_connected = false;
     }
 
-    if (m_probe->state() != QAbstractSocket::BoundState)
-        m_probe->bind();
+    if (m_udp->state() != QAbstractSocket::BoundState)
+        m_udp->bind();
 
     m_buffer.clear();
     m_pending.clear();
-    sendSearch();
+
+    logDebug(m_debug) << this << "discovery request sent";
+    m_udp->writeDatagram(request.toUtf8(), QHostAddress(MULTICAST_ADDRESS), MULTICAST_PORT);
     m_resetTimer->start(RESET_TIMEOUT);
 }
 
@@ -59,43 +62,42 @@ void DeviceObject::updateAvailability(Availability availability)
     emit availabilityUpdated(availability);
 }
 
-void DeviceObject::sendSearch(void)
+void DeviceObject::getProperties(void)
 {
-    QByteArray datagram = "M-SEARCH * HTTP/1.1\r\nHOST: " MULTICAST_ADDRESS ":1982\r\nMAN: \"ssdp:discover\"\r\nST: wifi_bulb\r\n\r\n";
-    logDebug(m_debug) << this << "discovery request sent";
-    m_probe->writeDatagram(datagram, QHostAddress(MULTICAST_ADDRESS), MULTICAST_PORT);
-}
-
-void DeviceObject::sendCommand(const QString &method, const QJsonArray &params)
-{
-    QByteArray data = QJsonDocument(QJsonObject {{"id", m_sequence}, {"method", method}, {"params", params}}).toJson(QJsonDocument::Compact).append("\r\n");
-    logDebug(m_debug) << this << "command sent:" << data.trimmed();
-    m_socket->write(data);
-    m_sequence++;
-}
-
-void DeviceObject::setProperty(const QString &method, const QVariant &value)
-{
-    sendCommand(method, QJsonArray {QJsonValue::fromVariant(value), EFFECT, TRANSITION});
-}
-
-void DeviceObject::getProperties(const QList <QString> &names)
-{
-    QJsonArray params;
-
-    if (names.isEmpty())
+    if (m_poll.isEmpty())
         return;
-
-    for (int i = 0; i < names.count(); i++)
-        params.append(names.at(i));
 
     if (m_pending.count() > 16)
         m_pending.clear();
 
-    m_pending.insert(m_sequence, names);
-    sendCommand("get_prop", params);
+    m_pending.insert(m_sequence, m_poll);
+    sendCommand("get_prop", QJsonArray::fromStringList(m_poll));
 }
 
+void DeviceObject::sendCommand(const QString &method, const QJsonArray &data)
+{
+    QByteArray request = QJsonDocument(QJsonObject {{"id", m_sequence++}, {"method", method}, {"params", data}}).toJson(QJsonDocument::Compact);
+    logDebug(m_debug) << this << "command sent:" << request.constData();
+    m_tcp->write(request.append("\r\n"));
+}
+
+void DeviceObject::sendCommand(const QString &method, const QVariant &value, const QVariant &mode)
+{
+    QJsonArray data {QJsonValue::fromVariant(value), "smooth", 500};
+
+    if (mode.isValid())
+        data.append(QJsonValue::fromVariant(mode));
+
+    sendCommand(method, data);
+}
+
+
+
+
+
+
+
+// NOT REVIEWED
 void DeviceObject::parseSearch(const QByteArray &datagram)
 {
     QMap <QString, QVariant> headers;
@@ -141,15 +143,16 @@ void DeviceObject::parseSearch(const QByteArray &datagram)
 
     parseProperties(headers);
 
-    if (!m_connected && m_socket->state() == QAbstractSocket::UnconnectedState)
-        m_socket->connectToHost(m_address, m_port);
+    if (!m_connected && m_tcp->state() == QAbstractSocket::UnconnectedState)
+        m_tcp->connectToHost(m_address, m_port);
 }
 
+// NOT REVIEWED
 void DeviceObject::parseMessage(const QByteArray &message)
 {
     QJsonObject json = QJsonDocument::fromJson(message).object();
 
-    logDebug(m_debug) << this << "message received:" << message;
+    logDebug(m_debug) << this << "message received:" << message.constData();
 
     if (json.isEmpty())
         return;
@@ -194,6 +197,7 @@ void DeviceObject::parseMessage(const QByteArray &message)
     }
 }
 
+// NOT REVIEWED
 void DeviceObject::buildCapabilities(const QString &model, const QList <QString> &support)
 {
     for (int i = 0; i < support.count(); i++)
@@ -223,6 +227,7 @@ void DeviceObject::buildCapabilities(const QString &model, const QList <QString>
     }
 }
 
+// NOT REVIEWED
 void DeviceObject::addLight(const QString &prefix, const QString &suffix, const QList <QString> &support)
 {
     QString mode = prefix.isEmpty() ? "color_mode" : "bg_lmode";
@@ -259,6 +264,7 @@ void DeviceObject::addLight(const QString &prefix, const QString &suffix, const 
     m_options.insert(QString("light%1").arg(suffix), options);
 }
 
+// NOT REVIEWED
 void DeviceObject::parseProperties(const QMap <QString, QVariant> &data)
 {
     QMap <QString, QVariant> properties = m_properties;
@@ -287,6 +293,7 @@ void DeviceObject::parseProperties(const QMap <QString, QVariant> &data)
     emit propertiesUpdated(properties);
 }
 
+// NOT REVIEWED
 void DeviceObject::mapProperties(const QString &prefix, const QString &suffix, const QMap <QString, QVariant> &data, QMap <QString, QVariant> &properties)
 {
     QString key = prefix.isEmpty() ? "color_mode" : "bg_lmode";
@@ -320,6 +327,7 @@ void DeviceObject::mapProperties(const QString &prefix, const QString &suffix, c
     }
 }
 
+// NOT REVIEWED
 void DeviceObject::action(const QString &name, const QVariant &data)
 {
     QRegExp regExp("_(\\d+)$");
@@ -333,6 +341,7 @@ void DeviceObject::action(const QString &name, const QVariant &data)
     controlLight(name, QString(), data);
 }
 
+// NOT REVIEWED
 void DeviceObject::controlLight(const QString &name, const QString &suffix, const QVariant &data)
 {
     QString prefix = suffix == "_2" ? "bg_" : QString();
@@ -353,23 +362,23 @@ void DeviceObject::controlLight(const QString &name, const QString &suffix, cons
         if (status != "on" && status != "off")
             return;
 
-        setProperty(QString("%1set_power").arg(prefix), status);
+        sendCommand(QString("%1set_power").arg(prefix), status);
         return;
     }
 
     if (name == "nightMode")
     {
-        sendCommand("set_power", QJsonArray {"on", EFFECT, TRANSITION, data.toBool() ? 5 : 1});
+        sendCommand("set_power", "on", data.toBool() ? 5 : 1);
         return;
     }
 
     if (m_properties.value(QString("status%1").arg(suffix)).toString() != "on")
-        setProperty(QString("%1set_power").arg(prefix), "on");
+        sendCommand(QString("%1set_power").arg(prefix), "on");
 
     if (name == "level")
     {
         int bright = qRound(data.toInt() * 100.0 / 255);
-        setProperty(QString("%1set_bright").arg(prefix), bright < 1 ? 1 : bright > 100 ? 100 : bright);
+        sendCommand(QString("%1set_bright").arg(prefix), bright < 1 ? 1 : bright > 100 ? 100 : bright);
     }
     else if (name == "color")
     {
@@ -380,7 +389,7 @@ void DeviceObject::controlLight(const QString &name, const QString &suffix, cons
             return;
 
         rgb = list.at(0).toInt() << 16 | list.at(1).toInt() << 8 | list.at(2).toInt();
-        setProperty(QString("%1set_rgb").arg(prefix), rgb ? rgb : 1);
+        sendCommand(QString("%1set_rgb").arg(prefix), rgb ? rgb : 1);
     }
     else if (name == "colorTemperature")
     {
@@ -390,80 +399,80 @@ void DeviceObject::controlLight(const QString &name, const QString &suffix, cons
             return;
 
         kelvin = qRound(1000000.0 / mired);
-        setProperty(QString("%1set_ct_abx").arg(prefix), kelvin < 1700 ? 1700 : kelvin > 6500 ? 6500 : kelvin);
+        sendCommand(QString("%1set_ct_abx").arg(prefix), kelvin < 1700 ? 1700 : kelvin > 6500 ? 6500 : kelvin);
     }
 }
 
-void DeviceObject::readyRead(void)
-{
-    int index;
 
-    if (sender() == m_probe)
-    {
-        while (m_probe->hasPendingDatagrams())
-        {
-            QByteArray datagram;
 
-            datagram.resize(static_cast <int> (m_probe->pendingDatagramSize()));
-            m_probe->readDatagram(datagram.data(), datagram.size());
-            parseSearch(datagram);
-        }
 
-        return;
-    }
 
-    m_buffer.append(m_socket->readAll());
 
-    if (m_buffer.length() > BUFFER_LENGTH_LIMIT)
-        m_buffer.clear();
 
-    while ((index = m_buffer.indexOf("\r\n")) >= 0)
-    {
-        QByteArray message = m_buffer.left(index);
-        m_buffer.remove(0, index + 2);
-        parseMessage(message);
-    }
-}
+
 
 void DeviceObject::socketError(QAbstractSocket::SocketError error)
 {
-    Q_UNUSED(error)
-
-    if (m_socket->state() == QAbstractSocket::ConnectedState)
-        return;
-
-    logWarning << this << "connection error:" << m_socket->errorString();
+    logWarning << this << "connection error:" << error;
     updateAvailability(Availability::Offline);
-    m_connected = false;
     m_resetTimer->start(RESET_TIMEOUT);
+    m_connected = false;
 }
 
 void DeviceObject::socketConnected(void)
 {
+    int descriptor = m_tcp->socketDescriptor(), keepAlive = 1, interval = 10, count = 3;
+
+    setsockopt(descriptor, SOL_SOCKET, SO_KEEPALIVE, &keepAlive, sizeof(keepAlive));
+    setsockopt(descriptor, SOL_TCP, TCP_KEEPIDLE, &interval, sizeof(interval));
+    setsockopt(descriptor, SOL_TCP, TCP_KEEPINTVL, &interval, sizeof(interval));
+    setsockopt(descriptor, SOL_TCP, TCP_KEEPCNT, &count, sizeof(count));
+
     logInfo << this << "successfully connected to" << QString("%1:%2").arg(m_address.toString()).arg(m_port);
-    m_socket->setSocketOption(QAbstractSocket::KeepAliveOption, 1);
+    m_resetTimer->stop();
     m_connected = true;
     m_buffer.clear();
-    m_resetTimer->stop();
-    getProperties(m_poll);
+    getProperties();
 }
 
 void DeviceObject::socketDisconnected(void)
 {
     updateAvailability(Availability::Offline);
-    m_connected = false;
     m_resetTimer->start(RESET_TIMEOUT);
+    m_connected = false;
+}
+
+void DeviceObject::readyRead(void)
+{
+    if (sender() == m_tcp)
+    {
+        m_buffer.append(m_tcp->readAll());
+
+        if (m_buffer.length() > BUFFER_LENGTH_LIMIT)
+            m_buffer.clear();
+
+        while (m_buffer.contains("\r\n"))
+        {
+            QByteArray message = m_buffer.mid(0, m_buffer.indexOf("\r\n"));
+            m_buffer.remove(0, message.length() + 2);
+            parseMessage(message);
+        }
+
+        return;
+    }
+
+    while (m_udp->hasPendingDatagrams())
+    {
+        QByteArray datagram;
+        datagram.resize(m_udp->pendingDatagramSize());
+        m_udp->readDatagram(datagram.data(), datagram.size());
+        parseSearch(datagram);
+    }
 }
 
 void DeviceObject::reset(void)
 {
     init();
-}
-
-void DeviceObject::ping(void)
-{
-    logDebug(m_debug) << this << "ping";
-    getProperties(m_poll);
 }
 
 void DeviceObject::update(void)
@@ -473,6 +482,9 @@ void DeviceObject::update(void)
     if (now > m_lastSeen + UNAVAILABLE_TIMEOUT)
         updateAvailability(Availability::Offline);
 
-    if (m_connected && now > m_lastSeen + PING_TIMEOUT)
-        ping();
+    if (now > m_lastSeen + PING_TIMEOUT && m_connected)
+    {
+        logDebug(m_debug) << this << "ping";
+        getProperties();
+    }
 }
