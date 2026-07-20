@@ -285,6 +285,12 @@ void DeviceObject::parseProperties(const QMap <QString, QVariant> &data)
             properties.insert("level", qRound(data.value("active_bright").toInt() * 255.0 / 100));
     }
 
+    if (properties.value("status").toString() == "off")
+        properties.insert("level", 0);
+
+    if (m_background && properties.value("status_1").toString() == "off")
+        properties.insert("level_1", 0);
+
     if (properties == m_properties)
         return;
 
@@ -300,7 +306,12 @@ void DeviceObject::mapProperties(bool backlight, const QMap <QString, QVariant> 
     int mode = data.contains(key) ? data.value(key).toInt() : -1;
 
     if (data.contains(power))
+    {
+        if (m_connected && data.value(power).toString() == "on" && properties.value(backlight ? "status_1" : "status").toString() != "on")
+            getProperties();
+
         properties.insert(backlight ? "status_1" : "status", data.value(power).toString() == "on" ? "on" : "off");
+    }
 
     if (data.contains(backlight ? "bg_bright" : "bright"))
         properties.insert(backlight ? "level_1" : "level", qRound(data.value(backlight ? "bg_bright" : "bright").toInt() * 255.0 / 100));
@@ -360,6 +371,12 @@ void DeviceObject::controlLight(const QString &name, bool backlight, const QVari
     if (name == "nightMode")
     {
         sendCommand("set_power", "on", data.toBool() ? 5 : 1);
+        return;
+    }
+
+    if (name == "level" && qRound(data.toInt() * 100.0 / 255) < 1)
+    {
+        sendCommand(backlight ? "bg_set_power" : "set_power", "off");
         return;
     }
 
