@@ -3,7 +3,6 @@
 
 #define SERVICE_VERSION     "1.0.0"
 
-#include <QUdpSocket>
 #include "device.h"
 #include "homed.h"
 
@@ -17,14 +16,10 @@ public:
 
 private:
 
-    QList <Device> m_devices;
-    QList <QString> m_discovered;
     bool m_names;
-
-    QUdpSocket *m_discovery;
+    QList <Device> m_devices;
 
     void publishDevice(DeviceObject *device);
-    void discover(void);
 
 public slots:
 
@@ -38,8 +33,6 @@ private slots:
     void availabilityUpdated(Availability availability);
     void propertiesUpdated(const QMap <QString, QVariant> &properties);
     void capabilitiesUpdated(void);
-
-    void discoveryReadyRead(void);
 
 };
 

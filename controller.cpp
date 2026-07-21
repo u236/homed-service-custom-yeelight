@@ -29,23 +29,6 @@ Controller::Controller(const QString &configFile) : HOMEd(SERVICE_VERSION, confi
         m_devices.append(device);
         device->init();
     }
-
-    m_discovery = new QUdpSocket(this);
-    connect(m_discovery, &QUdpSocket::readyRead, this, &Controller::discoveryReadyRead);
-
-    if (getConfig()->value("discovery/enabled", false).toBool())
-        discover();
-}
-
-void Controller::discover(void)
-{
-    QByteArray datagram = "M-SEARCH * HTTP/1.1\r\nHOST: " MULTICAST_ADDRESS ":1982\r\nMAN: \"ssdp:discover\"\r\nST: wifi_bulb\r\n\r\n";
-
-    if (m_discovery->state() != QAbstractSocket::BoundState)
-        m_discovery->bind();
-
-    logInfo << "Discovery request sent, waiting for devices to respond...";
-    m_discovery->writeDatagram(datagram, QHostAddress(MULTICAST_ADDRESS), MULTICAST_PORT);
 }
 
 void Controller::publishDevice(DeviceObject *device)
@@ -165,39 +148,4 @@ void Controller::capabilitiesUpdated(void)
 
     if (!device->published())
         publishDevice(device);
-}
-
-void Controller::discoveryReadyRead(void)
-{
-    while (m_discovery->hasPendingDatagrams())
-    {
-        QByteArray datagram;
-        QMap <QString, QString> headers;
-        QList <QByteArray> lines;
-        QString location, id;
-
-        datagram.resize(static_cast <int> (m_discovery->pendingDatagramSize()));
-        m_discovery->readDatagram(datagram.data(), datagram.size());
-        lines = datagram.split('\n');
-
-        for (int i = 0; i < lines.count(); i++)
-        {
-            QByteArray line = lines.at(i).trimmed();
-            int split = line.indexOf(':');
-
-            if (split < 0)
-                continue;
-
-            headers.insert(QString(line.left(split)).trimmed().toLower(), QString(line.mid(split + 1)).trimmed());
-        }
-
-        location = headers.value("location");
-        id = headers.value("id");
-
-        if (!location.startsWith("yeelight://") || id.isEmpty() || m_discovered.contains(id))
-            continue;
-
-        m_discovered.append(id);
-        logInfo << "Discovered device" << id.toUtf8().constData() << "model" << headers.value("model").toUtf8().constData() << "at" << location.mid(11).toUtf8().constData() << "supports:" << headers.value("support").toUtf8().constData();
-    }
 }
