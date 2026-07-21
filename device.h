@@ -1,19 +1,15 @@
 #ifndef DEVICE_H
 #define DEVICE_H
 
+#define RESET_TIMEOUT               10000
 #define PING_TIMEOUT                10000
 #define UNAVAILABLE_TIMEOUT         30000
-#define RESET_TIMEOUT               10000
 
 #define MULTICAST_ADDRESS           "239.255.255.250"
 #define MULTICAST_PORT              1982
 #define CONTROL_PORT                55443
 
 #define BUFFER_LENGTH_LIMIT         1024
-
-
-
-
 
 #include <QJsonArray>
 #include <QJsonObject>
@@ -93,7 +89,8 @@ private:
     void sendCommand(bool bg, const QString &method, const QVariant &value, const QVariant &mode = QVariant());
 
     void getProperties(void);
-    void mapProperties(bool bg, const QMap <QString, QVariant> &data, QMap <QString, QVariant> &properties);
+
+    void parseProperties(bool bg, const QMap <QString, QVariant> &data, QMap <QString, QVariant> &properties);
     void parseProperties(const QMap <QString, QVariant> &data);
 
     void parseMessage(const QByteArray &message);

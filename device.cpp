@@ -204,15 +204,9 @@ void DeviceObject::getProperties(void)
     sendCommand(false, "get_prop", QJsonArray::fromStringList(m_items));
 }
 
-
-
-
-
-// NOT REVIEWED
-void DeviceObject::mapProperties(bool bg, const QMap <QString, QVariant> &data, QMap <QString, QVariant> &properties)
+void DeviceObject::parseProperties(bool bg, const QMap <QString, QVariant> &data, QMap <QString, QVariant> &properties)
 {
-    QString power = bg ? "bg_power" : m_bg ? "main_power" : "power";
-    QString key = bg ? "bg_lmode" : "color_mode";
+    QString power = bg ? "bg_power" : m_bg ? "main_power" : "power", key = bg ? "bg_lmode" : "color_mode";
     int mode = data.contains(key) ? data.value(key).toInt() : -1;
 
     if (data.contains(power))
@@ -220,64 +214,54 @@ void DeviceObject::mapProperties(bool bg, const QMap <QString, QVariant> &data, 
         if (m_connected && data.value(power).toString() == "on" && properties.value(suffix(bg, "status")).toString() != "on")
             getProperties();
 
-        properties.insert(suffix(bg, "status"), data.value(power).toString() == "on" ? "on" : "off");
+        properties.insert(suffix(bg, "status"), data.value(power).toString());
     }
 
     if (data.contains(prefix(bg, "bright")))
-        properties.insert(suffix(bg, "level"), qRound(data.value(prefix(bg, "bright")).toInt() * 255.0 / 100));
-
-    if (data.contains(prefix(bg, "ct")) && data.value(prefix(bg, "ct")).toInt() > 0)
-        properties.insert(suffix(bg, "colorTemperature"), qRound(1000000.0 / data.value(prefix(bg, "ct")).toInt()));
-
-    if (mode != -1)
-        properties.insert(suffix(bg, "colorMode"), mode != 2);
+        properties.insert(suffix(bg, "level"), static_cast <quint8> (round(data.value(prefix(bg, "bright")).toInt() * 255 / 100.0)));
 
     if (data.contains(prefix(bg, "rgb")))
     {
-        int rgb = data.value(prefix(bg, "rgb")).toInt();
-        properties.insert(suffix(bg, "color"), QVariantList {rgb >> 16 & 0xFF, rgb >> 8 & 0xFF, rgb & 0xFF});
+        int value = data.value(prefix(bg, "rgb")).toInt();
+        properties.insert(suffix(bg, "color"), QVariantList {value >> 16 & 0xFF, value >> 8 & 0xFF, value & 0xFF});
     }
+
+    if (data.contains(prefix(bg, "ct")) && data.value(prefix(bg, "ct")).toInt() > 0)
+        properties.insert(suffix(bg, "colorTemperature"), static_cast <quint16> (round(1000000.0 / data.value(prefix(bg, "ct")).toInt())));
+
+    if (mode >= 0)
+        properties.insert(suffix(bg, "colorMode"), mode != 2);
 }
 
-
-// NOT REVIEWED
 void DeviceObject::parseProperties(const QMap <QString, QVariant> &data)
 {
     QMap <QString, QVariant> properties = m_properties;
 
-    if (m_bg)
+    for (int i = 0; i < (m_bg ? 2 : 1); i++)
     {
-        mapProperties(false, data, properties);
-        mapProperties(true, data, properties);
+        parseProperties(i, data, properties);
+
+        if (properties.value(suffix(i, "status")).toString() == "on" || !m_options.value(suffix(i, "light")).toArray().contains("level"))
+            continue;
+
+        properties.insert(suffix(i, "level"), 0);
     }
-    else
-        mapProperties(false, data, properties);
 
     if (m_ceiling)
     {
+        if (data.contains("active_bright") && properties.value("status").toString() == "on")
+            properties.insert("level", static_cast <quint8> (round(data.value("active_bright").toInt() * 255 / 100.0)));
+
         if (data.contains("active_mode"))
             properties.insert("nightMode", data.value("active_mode").toInt() == 1);
-
-        if (data.contains("active_bright"))
-            properties.insert("level", qRound(data.value("active_bright").toInt() * 255.0 / 100));
     }
 
-    if (properties.value("status").toString() == "off" && m_options.value("light").toArray().contains("level"))
-        properties.insert("level", 0);
-
-    if (m_bg && properties.value("status_1").toString() == "off" && m_options.value("light_1").toArray().contains("level"))
-        properties.insert("level_1", 0);
-
-    if (properties == m_properties)
+    if (m_properties == properties)
         return;
 
     m_properties = properties;
     emit propertiesUpdated(properties);
 }
-
-
-
-
 
 void DeviceObject::parseMessage(const QByteArray &message)
 {
@@ -370,10 +354,8 @@ void DeviceObject::discovery(const QByteArray &datagram)
             break;
         }
 
-        addLight(false, support);
-
-        if (m_bg)
-            addLight(true, support);
+        for (int i = 0; i < (m_bg ? 2 : 1); i++)
+            addLight(i, support);
 
         if (model.startsWith("ceil"))
         {
@@ -386,7 +368,6 @@ void DeviceObject::discovery(const QByteArray &datagram)
 
         logInfo << this << "model" << model << "with exposes" << m_exposes << "discovered"; // TODO: clean up
         m_ready = true;
-
         emit capabilitiesUpdated(); // TODO: rename it
     }
 
