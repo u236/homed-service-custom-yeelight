@@ -1,5 +1,4 @@
 include(../homed-common/homed-common.pri)
-include(../homed-common/homed-color.pri)
 
 HEADERS += \
     controller.h \
