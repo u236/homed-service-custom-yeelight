@@ -1,10 +1,11 @@
+#include <math.h>
 #include <netinet/tcp.h>
 #include <QJsonDocument>
 #include "color.h"
 #include "device.h"
 #include "logger.h"
 
-DeviceObject::DeviceObject(const QString &address, const QString &id, bool debug) : QObject(nullptr), m_id(id), m_name(id), m_debug(debug), m_resetTimer(new QTimer(this)), m_updateTimer(new QTimer(this)), m_tcp(new QTcpSocket(this)), m_udp(new QUdpSocket(this)), m_address(QHostAddress(address)), m_port(CONTROL_PORT), m_connected(false), m_sequence(1), m_background(false), m_ceiling(false), m_ready(false), m_published(false), m_availability(Availability::Unknown), m_lastSeen(QDateTime::currentMSecsSinceEpoch())
+DeviceObject::DeviceObject(const QString &address, const QString &id, bool debug) : QObject(nullptr), m_id(id), m_name(id), m_debug(debug), m_resetTimer(new QTimer(this)), m_updateTimer(new QTimer(this)), m_tcp(new QTcpSocket(this)), m_udp(new QUdpSocket(this)), m_address(QHostAddress(address)), m_port(CONTROL_PORT), m_connected(false), m_sequence(1), m_pending(0), m_background(false), m_ceiling(false), m_ready(false), m_published(false), m_availability(Availability::Unknown), m_lastSeen(QDateTime::currentMSecsSinceEpoch())
 {
     connect(m_tcp, &QTcpSocket::errorOccurred, this, &DeviceObject::socketError);
     connect(m_tcp, &QTcpSocket::connected, this, &DeviceObject::socketConnected);
@@ -46,11 +47,90 @@ void DeviceObject::init(void)
         m_udp->bind();
 
     m_buffer.clear();
-    m_pending.clear();
+    m_pending = 0;
 
     logDebug(m_debug) << this << "discovery request sent";
     m_udp->writeDatagram(request.toUtf8(), QHostAddress(MULTICAST_ADDRESS), MULTICAST_PORT);
     m_resetTimer->start(RESET_TIMEOUT);
+}
+
+void DeviceObject::action(const QString &name, const QVariant &data)
+{
+    QList <QString> actionList = {"status", "level", "color", "colorTemperature", "nightMode"};
+    bool bg = name.endsWith("_1"), check = m_properties.value(bg ? "status_1" : "status").toString() != "on";
+
+    if (!m_connected)
+        return;
+
+    switch (actionList.indexOf(name.split('_').value(0)))
+    {
+        case 0: // status
+        {
+            QList <QString> list = {"off", "on", "toggle"};
+            QString value = data.toString();
+
+            switch (list.indexOf(value))
+            {
+                case 0 ... 1: sendCommand(bg, "set_power", value);  break;
+                case 2: sendCommand(bg, "toggle"); break;
+            }
+
+            break;
+        }
+
+        case 1: // level
+        {
+            quint8 value = static_cast <quint8> (round(data.toInt() * 100.0 / 255));
+
+            if (!value)
+            {
+                sendCommand(bg, "set_power", "off");
+                break;
+            }
+
+            if (check)
+                sendCommand(bg, "set_power", "on");
+
+            sendCommand(bg, "set_bright", value > 100 ? 100 : value);
+            break;
+        }
+
+        case 2: // color
+        {
+            QList <QVariant> list = data.toList();
+
+            if (list.count() < 3)
+                break;
+
+            if (check)
+                sendCommand(bg, "set_power", "on");
+
+            sendCommand(bg, "set_rgb", list.at(0).toInt() << 16 | list.at(1).toInt() << 8 | list.at(2).toInt());
+            break;
+        }
+
+        case 3: // colorTemperature
+        {
+            quint32 value = static_cast <quint32> (data.toInt());
+
+            if (!value)
+                break;
+
+            value = static_cast <quint32> (round(1000000.0 / value));
+
+            if (check)
+                sendCommand(bg, "set_power", "on");
+
+            sendCommand(bg, "set_ct_abx", value < 1700 ? 1700 : value > 6500 ? 6500 : value);
+            break;
+        }
+
+        case 4: // nightMode
+        {
+            sendCommand(false, "set_power", "on", data.toBool() ? 5 : 1);
+            break;
+        }
+    }
 }
 
 void DeviceObject::updateAvailability(Availability availability)
@@ -64,31 +144,28 @@ void DeviceObject::updateAvailability(Availability availability)
 
 void DeviceObject::getProperties(void)
 {
-    if (m_poll.isEmpty())
+    if (m_items.isEmpty())
         return;
 
-    if (m_pending.count() > 16)
-        m_pending.clear();
-
-    m_pending.insert(m_sequence, m_poll);
-    sendCommand("get_prop", QJsonArray::fromStringList(m_poll));
+    m_pending = m_sequence;
+    sendCommand(false, "get_prop", QJsonArray::fromStringList(m_items));
 }
 
-void DeviceObject::sendCommand(const QString &method, const QJsonArray &data)
+void DeviceObject::sendCommand(bool bg, const QString &method, const QJsonArray &data)
 {
-    QByteArray request = QJsonDocument(QJsonObject {{"id", m_sequence++}, {"method", method}, {"params", data}}).toJson(QJsonDocument::Compact);
+    QByteArray request = QJsonDocument(QJsonObject {{"id", m_sequence++}, {"method", bg ? QString("bg_%1").arg(method) : method}, {"params", data}}).toJson(QJsonDocument::Compact);
     logDebug(m_debug) << this << "command sent:" << request.constData();
     m_tcp->write(request.append("\r\n"));
 }
 
-void DeviceObject::sendCommand(const QString &method, const QVariant &value, const QVariant &mode)
+void DeviceObject::sendCommand(bool bg, const QString &method, const QVariant &value, const QVariant &mode)
 {
-    QJsonArray data {QJsonValue::fromVariant(value), "smooth", 500};
+    QJsonArray data = {QJsonValue::fromVariant(value), "smooth", 500};
 
     if (mode.isValid())
         data.append(QJsonValue::fromVariant(mode));
 
-    sendCommand(method, data);
+    sendCommand(bg, method, data);
 }
 
 
@@ -173,22 +250,20 @@ void DeviceObject::parseMessage(const QByteArray &message)
         if (json.contains("error"))
         {
             logWarning << this << "command error:" << QJsonDocument(json.value("error").toObject()).toJson(QJsonDocument::Compact);
-            m_pending.remove(id);
             return;
         }
 
-        if (json.contains("result") && m_pending.contains(id))
+        if (json.contains("result") && id == m_pending)
         {
-            QList <QString> names = m_pending.take(id);
             QJsonArray result = json.value("result").toArray();
             QMap <QString, QVariant> data;
 
-            for (int i = 0; i < names.count() && i < result.count(); i++)
+            for (int i = 0; i < m_items.count() && i < result.count(); i++)
             {
                 QString value = result.at(i).toString();
 
                 if (!value.isEmpty())
-                    data.insert(names.at(i), value);
+                    data.insert(m_items.at(i), value);
             }
 
             if (!data.isEmpty())
@@ -222,45 +297,45 @@ void DeviceObject::buildCapabilities(const QString &model, const QList <QString>
         m_ceiling = true;
         m_exposes.append("nightMode");
         m_options.insert("nightMode", QJsonObject {{"type", "toggle"}, {"icon", "mdi:weather-night"}});
-        m_poll.append("active_mode");
-        m_poll.append("active_bright");
+        m_items.append("active_mode");
+        m_items.append("active_bright");
     }
 }
 
 // NOT REVIEWED
-void DeviceObject::addLight(bool backlight, const QList <QString> &support)
+void DeviceObject::addLight(bool bg, const QList <QString> &support)
 {
     QJsonArray options;
 
-    m_poll.append(backlight ? "bg_power" : m_background ? "main_power" : "power");
+    m_items.append(bg ? "bg_power" : m_background ? "main_power" : "power");
 
-    if (support.contains(backlight ? "bg_set_bright" : "set_bright"))
+    if (support.contains(bg ? "bg_set_bright" : "set_bright"))
     {
         options.append("level");
-        m_poll.append(backlight ? "bg_bright" : "bright");
+        m_items.append(bg ? "bg_bright" : "bright");
     }
 
-    if (support.contains(backlight ? "bg_set_rgb" : "set_rgb") || support.contains(backlight ? "bg_set_hsv" : "set_hsv"))
+    if (support.contains(bg ? "bg_set_rgb" : "set_rgb") || support.contains(bg ? "bg_set_hsv" : "set_hsv"))
     {
         options.append("color");
-        m_poll.append(backlight ? "bg_rgb" : "rgb");
-        m_poll.append(backlight ? "bg_hue" : "hue");
-        m_poll.append(backlight ? "bg_sat" : "sat");
-        m_poll.append(backlight ? "bg_lmode" : "color_mode");
+        m_items.append(bg ? "bg_rgb" : "rgb");
+        m_items.append(bg ? "bg_hue" : "hue");
+        m_items.append(bg ? "bg_sat" : "sat");
+        m_items.append(bg ? "bg_lmode" : "color_mode");
     }
 
-    if (support.contains(backlight ? "bg_set_ct_abx" : "set_ct_abx"))
+    if (support.contains(bg ? "bg_set_ct_abx" : "set_ct_abx"))
     {
         options.append("colorTemperature");
-        m_poll.append(backlight ? "bg_ct" : "ct");
-        m_options.insert(backlight ? "colorTemperature_1" : "colorTemperature", QJsonObject {{"min", COLOR_TEMPERATURE_MIN}, {"max", COLOR_TEMPERATURE_MAX}});
+        m_items.append(bg ? "bg_ct" : "ct");
+        m_options.insert(bg ? "colorTemperature_1" : "colorTemperature", QJsonObject {{"min", COLOR_TEMPERATURE_MIN}, {"max", COLOR_TEMPERATURE_MAX}});
     }
 
     if (options.contains("color") && options.contains("colorTemperature"))
         options.append("colorMode");
 
-    m_exposes.append(backlight ? "light_1" : "light");
-    m_options.insert(backlight ? "light_1" : "light", options);
+    m_exposes.append(bg ? "light_1" : "light");
+    m_options.insert(bg ? "light_1" : "light", options);
 }
 
 // NOT REVIEWED
@@ -299,120 +374,43 @@ void DeviceObject::parseProperties(const QMap <QString, QVariant> &data)
 }
 
 // NOT REVIEWED
-void DeviceObject::mapProperties(bool backlight, const QMap <QString, QVariant> &data, QMap <QString, QVariant> &properties)
+void DeviceObject::mapProperties(bool bg, const QMap <QString, QVariant> &data, QMap <QString, QVariant> &properties)
 {
-    QString power = backlight ? "bg_power" : m_background ? "main_power" : "power";
-    QString key = backlight ? "bg_lmode" : "color_mode";
+    QString power = bg ? "bg_power" : m_background ? "main_power" : "power";
+    QString key = bg ? "bg_lmode" : "color_mode";
     int mode = data.contains(key) ? data.value(key).toInt() : -1;
 
     if (data.contains(power))
     {
-        if (m_connected && data.value(power).toString() == "on" && properties.value(backlight ? "status_1" : "status").toString() != "on")
+        if (m_connected && data.value(power).toString() == "on" && properties.value(bg ? "status_1" : "status").toString() != "on")
             getProperties();
 
-        properties.insert(backlight ? "status_1" : "status", data.value(power).toString() == "on" ? "on" : "off");
+        properties.insert(bg ? "status_1" : "status", data.value(power).toString() == "on" ? "on" : "off");
     }
 
-    if (data.contains(backlight ? "bg_bright" : "bright"))
-        properties.insert(backlight ? "level_1" : "level", qRound(data.value(backlight ? "bg_bright" : "bright").toInt() * 255.0 / 100));
+    if (data.contains(bg ? "bg_bright" : "bright"))
+        properties.insert(bg ? "level_1" : "level", qRound(data.value(bg ? "bg_bright" : "bright").toInt() * 255.0 / 100));
 
-    if (data.contains(backlight ? "bg_ct" : "ct") && data.value(backlight ? "bg_ct" : "ct").toInt() > 0)
-        properties.insert(backlight ? "colorTemperature_1" : "colorTemperature", qRound(1000000.0 / data.value(backlight ? "bg_ct" : "ct").toInt()));
+    if (data.contains(bg ? "bg_ct" : "ct") && data.value(bg ? "bg_ct" : "ct").toInt() > 0)
+        properties.insert(bg ? "colorTemperature_1" : "colorTemperature", qRound(1000000.0 / data.value(bg ? "bg_ct" : "ct").toInt()));
 
     if (mode != -1)
-        properties.insert(backlight ? "colorMode_1" : "colorMode", mode != 2);
+        properties.insert(bg ? "colorMode_1" : "colorMode", mode != 2);
 
     if (mode == 3)
     {
-        if (data.contains(backlight ? "bg_hue" : "hue") && data.contains(backlight ? "bg_sat" : "sat"))
+        if (data.contains(bg ? "bg_hue" : "hue") && data.contains(bg ? "bg_sat" : "sat"))
         {
-            Color color = Color::fromHS(data.value(backlight ? "bg_hue" : "hue").toDouble() / 360, data.value(backlight ? "bg_sat" : "sat").toDouble() / 100);
-            properties.insert(backlight ? "color_1" : "color", QVariantList {qRound(color.r() * 255), qRound(color.g() * 255), qRound(color.b() * 255)});
+            Color color = Color::fromHS(data.value(bg ? "bg_hue" : "hue").toDouble() / 360, data.value(bg ? "bg_sat" : "sat").toDouble() / 100);
+            properties.insert(bg ? "color_1" : "color", QVariantList {qRound(color.r() * 255), qRound(color.g() * 255), qRound(color.b() * 255)});
         }
     }
-    else if (data.contains(backlight ? "bg_rgb" : "rgb"))
+    else if (data.contains(bg ? "bg_rgb" : "rgb"))
     {
-        int rgb = data.value(backlight ? "bg_rgb" : "rgb").toInt();
-        properties.insert(backlight ? "color_1" : "color", QVariantList {rgb >> 16 & 0xFF, rgb >> 8 & 0xFF, rgb & 0xFF});
+        int rgb = data.value(bg ? "bg_rgb" : "rgb").toInt();
+        properties.insert(bg ? "color_1" : "color", QVariantList {rgb >> 16 & 0xFF, rgb >> 8 & 0xFF, rgb & 0xFF});
     }
 }
-
-// NOT REVIEWED
-void DeviceObject::action(const QString &name, const QVariant &data)
-{
-    bool backlight = name.endsWith("_1");
-
-    controlLight(backlight ? name.left(name.length() - 2) : name, backlight, data);
-}
-
-// NOT REVIEWED
-void DeviceObject::controlLight(const QString &name, bool backlight, const QVariant &data)
-{
-    if (!m_connected)
-        return;
-
-    if (name == "status")
-    {
-        QString status = data.toString();
-
-        if (status == "toggle")
-        {
-            sendCommand(backlight ? "bg_toggle" : "toggle");
-            return;
-        }
-
-        if (status != "on" && status != "off")
-            return;
-
-        sendCommand(backlight ? "bg_set_power" : "set_power", status);
-        return;
-    }
-
-    if (name == "nightMode")
-    {
-        sendCommand("set_power", "on", data.toBool() ? 5 : 1);
-        return;
-    }
-
-    if (name == "level" && qRound(data.toInt() * 100.0 / 255) < 1)
-    {
-        sendCommand(backlight ? "bg_set_power" : "set_power", "off");
-        return;
-    }
-
-    if (m_properties.value(backlight ? "status_1" : "status").toString() != "on")
-        sendCommand(backlight ? "bg_set_power" : "set_power", "on");
-
-    if (name == "level")
-    {
-        int bright = qRound(data.toInt() * 100.0 / 255);
-        sendCommand(backlight ? "bg_set_bright" : "set_bright", bright < 1 ? 1 : bright > 100 ? 100 : bright);
-    }
-    else if (name == "color")
-    {
-        QVariantList list = data.toList();
-        int rgb;
-
-        if (list.count() < 3)
-            return;
-
-        rgb = list.at(0).toInt() << 16 | list.at(1).toInt() << 8 | list.at(2).toInt();
-        sendCommand(backlight ? "bg_set_rgb" : "set_rgb", rgb ? rgb : 1);
-    }
-    else if (name == "colorTemperature")
-    {
-        int mired = data.toInt(), kelvin;
-
-        if (mired < 1)
-            return;
-
-        kelvin = qRound(1000000.0 / mired);
-        sendCommand(backlight ? "bg_set_ct_abx" : "set_ct_abx", kelvin < 1700 ? 1700 : kelvin > 6500 ? 6500 : kelvin);
-    }
-}
-
-
-
 
 
 
