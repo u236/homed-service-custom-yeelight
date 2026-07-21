@@ -8,33 +8,32 @@ Controller::Controller(const QString &configFile) : HOMEd(SERVICE_VERSION, confi
     for (int i = 0; i < names.count(); i++)
     {
         const QString &name = names.at(i);
-        QString address;
-        bool debug;
 
-        if (name == "log" || name == "mqtt")
-            continue;
+        if (name != "log" && name != "mqtt")
+        {
+            QString address = getConfig()->value(QString("%1/address").arg(name)).toString();
+            bool debug = getConfig()->value(QString("%1/debug").arg(name), false).toBool();
+            Device device;
 
-        address = getConfig()->value(QString("%1/address").arg(name)).toString();
+            if (address.isEmpty())
+                continue;
 
-        if (address.isEmpty())
-            continue;
+            device = Device(new DeviceObject(address, name, debug));
 
-        debug = getConfig()->value(QString("%1/debug").arg(name), false).toBool();
-        Device device(new DeviceObject(address, name, debug));
+            connect(device.data(), &DeviceObject::deviceUpdated, this, &Controller::deviceUpdated);
+            connect(device.data(), &DeviceObject::availabilityUpdated, this, &Controller::availabilityUpdated);
+            connect(device.data(), &DeviceObject::propertiesUpdated, this, &Controller::propertiesUpdated);
 
-        connect(device.data(), &DeviceObject::availabilityUpdated, this, &Controller::availabilityUpdated);
-        connect(device.data(), &DeviceObject::propertiesUpdated, this, &Controller::propertiesUpdated);
-        connect(device.data(), &DeviceObject::capabilitiesUpdated, this, &Controller::capabilitiesUpdated);
-
-        m_devices.append(device);
-        device->init();
+            m_devices.append(device);
+            device->init();
+        }
     }
 }
 
 void Controller::publishDevice(DeviceObject *device)
 {
-    device->setPublished();
     mqttPublish(mqttTopic("command/custom"), QJsonObject {{"action", "updateDevice"}, {"data", QJsonObject {{"real", true}, {"active", true}, {"cloud", false}, {"discovery", false}, {"id", device->id()}, {"service", QCoreApplication::applicationName()}, {"exposes", device->exposes()}, {"options", device->options()}}}});
+    device->setPublished();
 }
 
 void Controller::quit(void)
@@ -128,6 +127,16 @@ void Controller::mqttReceived(const QByteArray &message, const QMqttTopicName &t
     }
 }
 
+void Controller::deviceUpdated(void)
+{
+    DeviceObject *device = reinterpret_cast <DeviceObject*> (sender());
+
+    if (device->published())
+        return;
+
+    publishDevice(device);
+}
+
 void Controller::availabilityUpdated(Availability availability)
 {
     DeviceObject *device = reinterpret_cast <DeviceObject*> (sender());
@@ -142,10 +151,3 @@ void Controller::propertiesUpdated(const QMap <QString, QVariant> &properties)
     mqttPublish(mqttTopic("fd/custom/%1").arg(m_names ? device->name() : device->id()), QJsonObject::fromVariantMap(properties));
 }
 
-void Controller::capabilitiesUpdated(void)
-{
-    DeviceObject *device = reinterpret_cast <DeviceObject*> (sender());
-
-    if (!device->published())
-        publishDevice(device);
-}

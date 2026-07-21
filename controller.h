@@ -30,9 +30,9 @@ private slots:
     void mqttConnected(void) override;
     void mqttReceived(const QByteArray &message, const QMqttTopicName &topic) override;
 
+    void deviceUpdated(void);
     void availabilityUpdated(Availability availability);
     void propertiesUpdated(const QMap <QString, QVariant> &properties);
-    void capabilitiesUpdated(void);
 
 };
 

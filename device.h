@@ -108,9 +108,9 @@ private slots:
 
 signals:
 
+    void deviceUpdated(void);
     void availabilityUpdated(Availability availability);
     void propertiesUpdated(const QMap <QString, QVariant> &properties);
-    void capabilitiesUpdated(void);
 
 };
 

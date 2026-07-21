@@ -368,7 +368,7 @@ void DeviceObject::discovery(const QByteArray &datagram)
 
         logInfo << this << "model" << model << "with exposes" << m_exposes << "discovered"; // TODO: clean up
         m_ready = true;
-        emit capabilitiesUpdated(); // TODO: rename it
+        emit deviceUpdated();
     }
 
     parseProperties(headers);
