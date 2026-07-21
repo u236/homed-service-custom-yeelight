@@ -88,28 +88,16 @@ private:
 
     void updateAvailability(Availability availability);
     void addLight(bool bg, const QList <QString> &support);
-    void getProperties(void);
 
     void sendCommand(bool bg, const QString &method, const QJsonArray &params = QJsonArray());
     void sendCommand(bool bg, const QString &method, const QVariant &value, const QVariant &mode = QVariant());
 
-
-
-
-
-
-
-    void parseSearch(const QByteArray &datagram);
-    void parseMessage(const QByteArray &message);
-
-    void parseProperties(const QMap <QString, QVariant> &data);
+    void getProperties(void);
     void mapProperties(bool bg, const QMap <QString, QVariant> &data, QMap <QString, QVariant> &properties);
+    void parseProperties(const QMap <QString, QVariant> &data);
 
-
-
-
-
-
+    void parseMessage(const QByteArray &message);
+    void discovery(const QByteArray &datagram);
 
 private slots:
 

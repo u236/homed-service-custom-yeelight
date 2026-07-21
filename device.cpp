@@ -178,15 +178,6 @@ void DeviceObject::addLight(bool bg, const QList <QString> &support)
     m_options.insert(suffix(bg, "light"), options);
 }
 
-void DeviceObject::getProperties(void)
-{
-    if (m_items.isEmpty())
-        return;
-
-    m_pending = m_sequence;
-    sendCommand(false, "get_prop", QJsonArray::fromStringList(m_items));
-}
-
 void DeviceObject::sendCommand(bool bg, const QString &method, const QJsonArray &data)
 {
     QByteArray request = QJsonDocument(QJsonObject {{"id", m_sequence++}, {"method", prefix(bg, method)}, {"params", data}}).toJson(QJsonDocument::Compact);
@@ -204,147 +195,49 @@ void DeviceObject::sendCommand(bool bg, const QString &method, const QVariant &v
     sendCommand(bg, method, data);
 }
 
-
-
-
-
-
-
-// NOT REVIEWED
-void DeviceObject::parseSearch(const QByteArray &datagram)
+void DeviceObject::getProperties(void)
 {
-    QMap <QString, QVariant> headers;
-    QList <QByteArray> lines = datagram.split('\n');
-    QString location, host;
-    quint16 port;
-
-    for (int i = 0; i < lines.count(); i++)
-    {
-        QByteArray line = lines.at(i).trimmed();
-        int split = line.indexOf(':');
-
-        if (split < 0)
-            continue;
-
-        headers.insert(QString(line.left(split)).trimmed().toLower(), QString(line.mid(split + 1)).trimmed());
-    }
-
-    location = headers.value("location").toString();
-
-    if (!location.startsWith("yeelight://"))
+    if (m_items.isEmpty())
         return;
 
-    host = location.mid(11).split(':').value(0);
-    port = static_cast <quint16> (location.mid(11).split(':').value(1).toInt());
-
-    if (host != m_address.toString())
-        return;
-
-    if (port)
-        m_port = port;
-
-    m_lastSeen = QDateTime::currentMSecsSinceEpoch();
-    updateAvailability(Availability::Online);
-
-    if (!m_ready)
-    {
-        QList <QString> support = headers.value("support").toString().split(0x20, Qt::SkipEmptyParts);
-        QString model = headers.value("model").toString();
-
-        for (int i = 0; i < support.count(); i++)
-        {
-            if (!support.at(i).startsWith("bg_"))
-                continue;
-
-            m_bg = true;
-            break;
-        }
-
-        addLight(false, support);
-
-        if (m_bg)
-            addLight(true, support);
-
-        if (model.startsWith("ceil"))
-        {
-            m_ceiling = true;
-            m_exposes.append("nightMode");
-            m_options.insert("nightMode", QJsonObject {{"type", "toggle"}, {"icon", "mdi:weather-night"}});
-            m_items.append("active_mode");
-            m_items.append("active_bright");
-        }
-
-        logInfo << this << "model" << model << "with exposes" << m_exposes << "discovered";
-        m_ready = true;
-
-        emit capabilitiesUpdated();
-    }
-
-    parseProperties(headers);
-
-    if (m_connected || m_tcp->state() != QAbstractSocket::UnconnectedState)
-        return;
-
-    m_tcp->connectToHost(m_address, m_port);
-}
-
-// NOT REVIEWED
-void DeviceObject::parseMessage(const QByteArray &message)
-{
-    QJsonObject json = QJsonDocument::fromJson(message).object();
-
-    logDebug(m_debug) << this << "message received:" << message.constData();
-
-    if (json.isEmpty())
-        return;
-
-    m_lastSeen = QDateTime::currentMSecsSinceEpoch();
-    updateAvailability(Availability::Online);
-
-    if (json.value("method").toString() == "props")
-    {
-        parseProperties(json.value("params").toObject().toVariantMap());
-        return;
-    }
-
-    if (json.contains("id"))
-    {
-        qint32 id = static_cast <qint32> (json.value("id").toInt());
-
-        if (json.contains("error"))
-        {
-            logWarning << this << "command error:" << QJsonDocument(json.value("error").toObject()).toJson(QJsonDocument::Compact);
-            return;
-        }
-
-        if (json.contains("result") && id == m_pending)
-        {
-            QJsonArray result = json.value("result").toArray();
-            QMap <QString, QVariant> data;
-
-            for (int i = 0; i < m_items.count() && i < result.count(); i++)
-            {
-                QString value = result.at(i).toString();
-
-                if (!value.isEmpty())
-                    data.insert(m_items.at(i), value);
-            }
-
-            if (!data.isEmpty())
-                parseProperties(data);
-        }
-    }
+    m_pending = m_sequence;
+    sendCommand(false, "get_prop", QJsonArray::fromStringList(m_items));
 }
 
 
 
 
 
+// NOT REVIEWED
+void DeviceObject::mapProperties(bool bg, const QMap <QString, QVariant> &data, QMap <QString, QVariant> &properties)
+{
+    QString power = bg ? "bg_power" : m_bg ? "main_power" : "power";
+    QString key = bg ? "bg_lmode" : "color_mode";
+    int mode = data.contains(key) ? data.value(key).toInt() : -1;
 
+    if (data.contains(power))
+    {
+        if (m_connected && data.value(power).toString() == "on" && properties.value(suffix(bg, "status")).toString() != "on")
+            getProperties();
 
+        properties.insert(suffix(bg, "status"), data.value(power).toString() == "on" ? "on" : "off");
+    }
 
+    if (data.contains(prefix(bg, "bright")))
+        properties.insert(suffix(bg, "level"), qRound(data.value(prefix(bg, "bright")).toInt() * 255.0 / 100));
 
+    if (data.contains(prefix(bg, "ct")) && data.value(prefix(bg, "ct")).toInt() > 0)
+        properties.insert(suffix(bg, "colorTemperature"), qRound(1000000.0 / data.value(prefix(bg, "ct")).toInt()));
 
+    if (mode != -1)
+        properties.insert(suffix(bg, "colorMode"), mode != 2);
+
+    if (data.contains(prefix(bg, "rgb")))
+    {
+        int rgb = data.value(prefix(bg, "rgb")).toInt();
+        properties.insert(suffix(bg, "color"), QVariantList {rgb >> 16 & 0xFF, rgb >> 8 & 0xFF, rgb & 0xFF});
+    }
+}
 
 
 // NOT REVIEWED
@@ -382,41 +275,128 @@ void DeviceObject::parseProperties(const QMap <QString, QVariant> &data)
     emit propertiesUpdated(properties);
 }
 
-// NOT REVIEWED
-void DeviceObject::mapProperties(bool bg, const QMap <QString, QVariant> &data, QMap <QString, QVariant> &properties)
+
+
+
+
+void DeviceObject::parseMessage(const QByteArray &message)
 {
-    QString power = bg ? "bg_power" : m_bg ? "main_power" : "power";
-    QString key = bg ? "bg_lmode" : "color_mode";
-    int mode = data.contains(key) ? data.value(key).toInt() : -1;
+    QJsonObject json = QJsonDocument::fromJson(message).object();
 
-    if (data.contains(power))
+    logDebug(m_debug) << this << "message received:" << message.constData();
+    m_lastSeen = QDateTime::currentMSecsSinceEpoch();
+    updateAvailability(Availability::Online);
+
+    if (json.value("method").toString() == "props")
     {
-        if (m_connected && data.value(power).toString() == "on" && properties.value(suffix(bg, "status")).toString() != "on")
-            getProperties();
-
-        properties.insert(suffix(bg, "status"), data.value(power).toString() == "on" ? "on" : "off");
+        parseProperties(json.value("params").toObject().toVariantMap());
+        return;
     }
 
-    if (data.contains(prefix(bg, "bright")))
-        properties.insert(suffix(bg, "level"), qRound(data.value(prefix(bg, "bright")).toInt() * 255.0 / 100));
+    if (!json.contains("id"))
+        return;
 
-    if (data.contains(prefix(bg, "ct")) && data.value(prefix(bg, "ct")).toInt() > 0)
-        properties.insert(suffix(bg, "colorTemperature"), qRound(1000000.0 / data.value(prefix(bg, "ct")).toInt()));
-
-    if (mode != -1)
-        properties.insert(suffix(bg, "colorMode"), mode != 2);
-
-    if (data.contains(prefix(bg, "rgb")))
+    if (json.contains("error"))
     {
-        int rgb = data.value(prefix(bg, "rgb")).toInt();
-        properties.insert(suffix(bg, "color"), QVariantList {rgb >> 16 & 0xFF, rgb >> 8 & 0xFF, rgb & 0xFF});
+        logWarning << this << "command error:" << QJsonDocument(json.value("error").toObject()).toJson(QJsonDocument::Compact);
+        return;
+    }
+
+    if (json.contains("result") && m_pending == static_cast <qint32> (json.value("id").toInt()))
+    {
+        QJsonArray result = json.value("result").toArray();
+        QMap <QString, QVariant> data;
+
+        for (int i = 0; i < m_items.count() && i < result.count(); i++)
+        {
+            QString value = result.at(i).toString();
+
+            if (value.isEmpty())
+                continue;
+
+            data.insert(m_items.at(i), value);
+        }
+
+        if (data.isEmpty())
+            return;
+
+        parseProperties(data);
     }
 }
 
+void DeviceObject::discovery(const QByteArray &datagram)
+{
+    QList <QString> list = QString(datagram).split("\r\n");
+    QMap <QString, QVariant> headers;
+    QString location, host;
 
+    for (int i = 0; i < list.count(); i++)
+    {
+        QString string = list.at(i).trimmed();
+        int index = string.indexOf(':');
 
+        if (index < 0)
+            continue;
 
+        headers.insert(string.left(index).trimmed().toLower(), string.mid(index + 1).trimmed());
+    }
 
+    location = headers.value("location").toString();
+
+    if (!location.startsWith("yeelight://"))
+        return;
+
+    list = location.mid(11).split(':');
+    host = list.value(0);
+
+    if (host != m_address.toString())
+        return;
+
+    m_port = static_cast <quint16> (list.value(1).toInt());
+    m_lastSeen = QDateTime::currentMSecsSinceEpoch();
+    updateAvailability(Availability::Online);
+
+    if (!m_ready)
+    {
+        QList <QString> support = headers.value("support").toString().split(0x20, Qt::SkipEmptyParts);
+        QString model = headers.value("model").toString();
+
+        for (int i = 0; i < support.count(); i++)
+        {
+            if (!support.at(i).startsWith("bg_"))
+                continue;
+
+            m_bg = true;
+            break;
+        }
+
+        addLight(false, support);
+
+        if (m_bg)
+            addLight(true, support);
+
+        if (model.startsWith("ceil"))
+        {
+            m_exposes.append("nightMode");
+            m_options.insert("nightMode", QJsonObject {{"type", "toggle"}, {"icon", "mdi:weather-night"}});
+            m_items.append("active_mode");
+            m_items.append("active_bright");
+            m_ceiling = true;
+        }
+
+        logInfo << this << "model" << model << "with exposes" << m_exposes << "discovered"; // TODO: clean up
+        m_ready = true;
+
+        emit capabilitiesUpdated(); // TODO: rename it
+    }
+
+    parseProperties(headers);
+
+    if (m_connected || m_tcp->state() != QAbstractSocket::UnconnectedState)
+        return;
+
+    m_tcp->connectToHost(m_address, m_port);
+}
 
 void DeviceObject::socketError(QAbstractSocket::SocketError error)
 {
@@ -473,7 +453,7 @@ void DeviceObject::readyRead(void)
         QByteArray datagram;
         datagram.resize(m_udp->pendingDatagramSize());
         m_udp->readDatagram(datagram.data(), datagram.size());
-        parseSearch(datagram);
+        discovery(datagram);
     }
 }
 
