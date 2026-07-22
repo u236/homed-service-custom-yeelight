@@ -345,6 +345,8 @@ void DeviceObject::discovery(const QByteArray &datagram)
         QList <QString> support = headers.value("support").toString().split(0x20, Qt::SkipEmptyParts);
         QString model = headers.value("model").toString();
 
+        logDebug(m_debug) << this << "support:" << support.join(", ").toUtf8().constData();
+
         for (int i = 0; i < support.count(); i++)
         {
             if (!support.at(i).startsWith("bg_"))
