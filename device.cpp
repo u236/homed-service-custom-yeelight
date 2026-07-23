@@ -138,7 +138,7 @@ void DeviceObject::updateAvailability(Availability availability)
         return;
 
     m_availability = availability;
-    emit availabilityUpdated(availability);
+    emit availabilityUpdated();
 }
 
 void DeviceObject::addLight(bool bg, const QList <QString> &support)
@@ -260,7 +260,7 @@ void DeviceObject::parseProperties(const QMap <QString, QVariant> &data)
         return;
 
     m_properties = properties;
-    emit propertiesUpdated(properties);
+    emit propertiesUpdated();
 }
 
 void DeviceObject::parseMessage(const QByteArray &message)
