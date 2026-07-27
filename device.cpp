@@ -4,7 +4,7 @@
 #include "device.h"
 #include "logger.h"
 
-DeviceObject::DeviceObject(const QString &address, const QString &id, bool debug) : QObject(nullptr), m_id(id), m_name(id), m_debug(debug), m_resetTimer(new QTimer(this)), m_updateTimer(new QTimer(this)), m_tcp(new QTcpSocket(this)), m_udp(new QUdpSocket(this)), m_address(QHostAddress(address)), m_port(CONTROL_PORT), m_connected(false), m_sequence(1), m_pending(0), m_bg(false), m_ceiling(false), m_ready(false), m_published(false), m_availability(Availability::Unknown), m_lastSeen(QDateTime::currentMSecsSinceEpoch())
+DeviceObject::DeviceObject(const QString &address, const QString &id, bool debug) : QObject(nullptr), m_id(id), m_name(id), m_debug(debug), m_resetTimer(new QTimer(this)), m_updateTimer(new QTimer(this)), m_tcp(new QTcpSocket(this)), m_udp(new QUdpSocket(this)), m_address(QHostAddress(address)), m_port(CONTROL_PORT), m_connected(false), m_sequence(1), m_pending(0), m_bg(false), m_ceiling(false), m_ready(false), m_published(false), m_off(false), m_availability(Availability::Unknown), m_lastSeen(QDateTime::currentMSecsSinceEpoch())
 {
     connect(m_tcp, &QTcpSocket::errorOccurred, this, &DeviceObject::socketError);
     connect(m_tcp, &QTcpSocket::connected, this, &DeviceObject::socketConnected);
@@ -74,6 +74,9 @@ void DeviceObject::action(const QString &name, const QVariant &data)
                 case 2: sendCommand(bg, "toggle"); break;
             }
 
+            if (!check && value != "on")
+                m_off = true;
+
             break;
         }
 
@@ -84,6 +87,10 @@ void DeviceObject::action(const QString &name, const QVariant &data)
             if (!value)
             {
                 sendCommand(bg, "set_power", "off");
+
+                if (!check)
+                    m_off = true;
+
                 break;
             }
 
@@ -211,10 +218,13 @@ void DeviceObject::parseProperties(bool bg, const QMap <QString, QVariant> &data
 
     if (data.contains(power))
     {
-        if (m_connected && data.value(power).toString() == "on" && properties.value(suffix(bg, "status")).toString() != "on")
+        QString value = data.value(power).toString();
+
+        if (m_connected && value == "on" && (m_off || properties.value(suffix(bg, "status")).toString() != "on"))
             getProperties();
 
-        properties.insert(suffix(bg, "status"), data.value(power).toString());
+        properties.insert(suffix(bg, "status"), value);
+        m_off = false;
     }
 
     if (data.contains(prefix(bg, "bright")))

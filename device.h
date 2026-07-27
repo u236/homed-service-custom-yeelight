@@ -70,7 +70,7 @@ private:
 
     QByteArray m_buffer;
     qint32 m_sequence, m_pending;
-    bool m_bg, m_ceiling, m_ready, m_published;
+    bool m_bg, m_ceiling, m_ready, m_published, m_off;
 
     Availability m_availability;
     qint64 m_lastSeen;
