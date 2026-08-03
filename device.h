@@ -4,6 +4,7 @@
 #define RESET_TIMEOUT               10000
 #define PING_TIMEOUT                10000
 #define UNAVAILABLE_TIMEOUT         30000
+#define UPDATE_TIMEOUT              1000
 
 #define MULTICAST_ADDRESS           "239.255.255.250"
 #define MULTICAST_PORT              1982
@@ -90,6 +91,7 @@ private:
     void sendCommand(bool bg, const QString &method, const QJsonArray &params = QJsonArray());
     void sendCommand(bool bg, const QString &method, const QVariant &value, const QVariant &mode = QVariant());
 
+    void waitForUpdate(void);
     void getProperties(void);
 
     void parseProperties(bool bg, const QMap <QString, QVariant> &data, QMap <QString, QVariant> &properties);

@@ -1,5 +1,6 @@
 #include <math.h>
 #include <netinet/tcp.h>
+#include <QEventLoop>
 #include <QJsonDocument>
 #include "device.h"
 #include "logger.h"
@@ -95,7 +96,10 @@ void DeviceObject::action(const QString &name, const QVariant &data)
             }
 
             if (check)
+            {
                 sendCommand(bg, "set_power", "on");
+                waitForUpdate();
+            }
 
             sendCommand(bg, "set_bright", value > 100 ? 100 : value);
             break;
@@ -109,7 +113,10 @@ void DeviceObject::action(const QString &name, const QVariant &data)
                 break;
 
             if (check)
+            {
                 sendCommand(bg, "set_power", "on");
+                waitForUpdate();
+            }
 
             sendCommand(bg, "set_rgb", list.at(0).toInt() << 16 | list.at(1).toInt() << 8 | list.at(2).toInt());
             break;
@@ -125,7 +132,10 @@ void DeviceObject::action(const QString &name, const QVariant &data)
             value = static_cast <quint32> (round(1000000.0 / value));
 
             if (check)
+            {
                 sendCommand(bg, "set_power", "on");
+                waitForUpdate();
+            }
 
             sendCommand(bg, "set_ct_abx", value < 1700 ? 1700 : value > 6500 ? 6500 : value);
             break;
@@ -200,6 +210,19 @@ void DeviceObject::sendCommand(bool bg, const QString &method, const QVariant &v
         data.append(QJsonValue::fromVariant(mode));
 
     sendCommand(bg, method, data);
+}
+
+void DeviceObject::waitForUpdate(void)
+{
+    QEventLoop loop;
+    QTimer timer;
+
+    connect(this, &DeviceObject::propertiesUpdated, &loop, &QEventLoop::quit);
+    connect(&timer, &QTimer::timeout, &loop, &QEventLoop::quit);
+
+    timer.setSingleShot(true);
+    timer.start(UPDATE_TIMEOUT);
+    loop.exec();
 }
 
 void DeviceObject::getProperties(void)
@@ -332,7 +355,7 @@ void DeviceObject::discovery(const QByteArray &datagram)
         if (index < 0)
             continue;
 
-        headers.insert(string.left(index).trimmed().toLower(), string.mid(index + 1).trimmed());
+        headers.insert(string.mid(0, index).trimmed().toLower(), string.mid(index + 1).trimmed());
     }
 
     location = headers.value("location").toString();
