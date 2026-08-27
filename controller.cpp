@@ -129,7 +129,7 @@ void Controller::mqttReceived(const QByteArray &message, const QMqttTopicName &t
         {
             const Device &device = m_devices.at(i);
 
-            if ((m_names ? device->name() : device->id()) != string)
+            if (!device->ready() || (m_names ? device->name() : device->id()) != string)
                 continue;
 
             for (auto it = json.begin(); it != json.end(); it++)
@@ -144,7 +144,7 @@ void Controller::deviceUpdated(void)
 {
     DeviceObject *device = reinterpret_cast <DeviceObject*> (sender());
 
-    if (device->published())
+    if (!m_status || device->published())
         return;
 
     publishDevice(device);

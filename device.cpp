@@ -349,13 +349,12 @@ void DeviceObject::discovery(const QByteArray &datagram)
 
     for (int i = 0; i < list.count(); i++)
     {
-        QString string = list.at(i).trimmed();
-        int index = string.indexOf(':');
+        int index = list.at(i).indexOf(':');
 
         if (index < 0)
             continue;
 
-        headers.insert(string.mid(0, index).trimmed().toLower(), string.mid(index + 1).trimmed());
+        headers.insert(list.at(i).mid(0, index).trimmed().toLower(), list.at(i).mid(index + 1).trimmed());
     }
 
     location = headers.value("location").toString();
