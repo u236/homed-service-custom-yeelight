@@ -124,7 +124,7 @@ void DeviceObject::action(const QString &name, const QVariant &data)
 
         case 3: // colorTemperature
         {
-            quint32 value = static_cast <quint32> (data.toInt());
+            quint32 value = data.toInt();
 
             if (!value)
                 break;
@@ -319,7 +319,7 @@ void DeviceObject::parseMessage(const QByteArray &message)
         return;
     }
 
-    if (json.contains("result") && m_pending == static_cast <qint32> (json.value("id").toInt()))
+    if (json.contains("result") && m_pending == json.value("id").toInt())
     {
         QJsonArray result = json.value("result").toArray();
         QMap <QString, QVariant> data;
