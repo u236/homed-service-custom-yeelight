@@ -1,7 +1,7 @@
 #ifndef CONTROLLER_H
 #define CONTROLLER_H
 
-#define SERVICE_VERSION     "1.0.3"
+#define SERVICE_VERSION     "1.0.4"
 
 #include "device.h"
 #include "homed.h"
@@ -16,7 +16,9 @@ public:
 
 private:
 
+    QString m_topic;
     bool m_status, m_names;
+
     QList <Device> m_devices;
 
     void publishDevice(DeviceObject *device);
