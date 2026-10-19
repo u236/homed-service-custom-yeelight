@@ -5,7 +5,7 @@
 #include "device.h"
 #include "logger.h"
 
-DeviceObject::DeviceObject(const QString &address, const QString &id, bool debug) : QObject(nullptr), m_id(id), m_name(id), m_debug(debug), m_resetTimer(new QTimer(this)), m_updateTimer(new QTimer(this)), m_tcp(new QTcpSocket(this)), m_udp(new QUdpSocket(this)), m_address(QHostAddress(address)), m_port(CONTROL_PORT), m_connected(false), m_sequence(1), m_pending(0), m_bg(false), m_ceiling(false), m_ready(false), m_published(false), m_off(false), m_availability(Availability::Unknown), m_lastSeen(QDateTime::currentMSecsSinceEpoch())
+DeviceObject::DeviceObject(const QString &address, const QString &id, bool debug) : QObject(nullptr), m_id(id), m_name(id), m_debug(debug), m_tcp(new QTcpSocket(this)), m_udp(new QUdpSocket(this)), m_timer(new QTimer(this)), m_address(QHostAddress(address)), m_port(CONTROL_PORT), m_connected(false), m_sequence(1), m_pending(0), m_bg(false), m_ceiling(false), m_ready(false), m_published(false), m_off(false), m_availability(Availability::Unknown)
 {
     connect(m_tcp, &QTcpSocket::errorOccurred, this, &DeviceObject::socketError);
     connect(m_tcp, &QTcpSocket::connected, this, &DeviceObject::socketConnected);
@@ -13,12 +13,9 @@ DeviceObject::DeviceObject(const QString &address, const QString &id, bool debug
     connect(m_tcp, &QTcpSocket::readyRead, this, &DeviceObject::readyRead);
 
     connect(m_udp, &QUdpSocket::readyRead, this, &DeviceObject::readyRead);
+    connect(m_timer, &QTimer::timeout, this, &DeviceObject::reset);
 
-    connect(m_resetTimer, &QTimer::timeout, this, &DeviceObject::reset);
-    connect(m_updateTimer, &QTimer::timeout, this, &DeviceObject::update);
-
-    m_resetTimer->setSingleShot(true);
-    m_updateTimer->start(1000);
+    m_timer->setSingleShot(true);
 }
 
 DeviceObject::~DeviceObject(void)
@@ -51,7 +48,7 @@ void DeviceObject::init(void)
 
     logDebug(m_debug) << this << "discovery request sent";
     m_udp->writeDatagram(request.toUtf8(), QHostAddress(MULTICAST_ADDRESS), MULTICAST_PORT);
-    m_resetTimer->start(RESET_TIMEOUT);
+    m_timer->start(RESET_TIMEOUT);
 }
 
 void DeviceObject::action(const QString &name, const QVariant &data)
@@ -198,6 +195,10 @@ void DeviceObject::addLight(bool bg, const QList <QString> &support)
 void DeviceObject::sendCommand(bool bg, const QString &method, const QJsonArray &data)
 {
     QByteArray request = QJsonDocument(QJsonObject {{"id", m_sequence++}, {"method", prefix(bg, method)}, {"params", data}}).toJson(QJsonDocument::Compact);
+
+    if (!m_connected)
+        return;
+
     logDebug(m_debug) << this << "command sent:" << request.constData();
     m_tcp->write(request.append("\r\n"));
 }
@@ -243,7 +244,7 @@ void DeviceObject::parseProperties(bool bg, const QMap <QString, QVariant> &data
     {
         QString value = data.value(power).toString();
 
-        if (m_connected && value == "on" && (m_off || properties.value(suffix(bg, "status")).toString() != "on"))
+        if (value == "on" && (m_off || properties.value(suffix(bg, "status")).toString() != "on"))
             getProperties();
 
         properties.insert(suffix(bg, "status"), value);
@@ -301,8 +302,6 @@ void DeviceObject::parseMessage(const QByteArray &message)
     QJsonObject json = QJsonDocument::fromJson(message).object();
 
     logDebug(m_debug) << this << "message received:" << message.constData();
-    m_lastSeen = QDateTime::currentMSecsSinceEpoch();
-    updateAvailability(Availability::Online);
 
     if (json.value("method").toString() == "props")
     {
@@ -316,6 +315,7 @@ void DeviceObject::parseMessage(const QByteArray &message)
     if (json.contains("error"))
     {
         logWarning << this << "command error:" << QJsonDocument(json.value("error").toObject()).toJson(QJsonDocument::Compact);
+        m_tcp->disconnectFromHost();
         return;
     }
 
@@ -369,8 +369,6 @@ void DeviceObject::discovery(const QByteArray &datagram)
         return;
 
     m_port = static_cast <quint16> (list.value(1).toInt());
-    m_lastSeen = QDateTime::currentMSecsSinceEpoch();
-    updateAvailability(Availability::Online);
 
     if (!m_ready)
     {
@@ -407,7 +405,7 @@ void DeviceObject::discovery(const QByteArray &datagram)
 
     parseProperties(headers);
 
-    if (m_connected || m_tcp->state() != QAbstractSocket::UnconnectedState)
+    if (m_tcp->state() != QAbstractSocket::UnconnectedState)
         return;
 
     m_tcp->connectToHost(m_address, m_port);
@@ -417,30 +415,35 @@ void DeviceObject::socketError(QAbstractSocket::SocketError error)
 {
     logWarning << this << "connection error:" << error;
     updateAvailability(Availability::Offline);
-    m_resetTimer->start(RESET_TIMEOUT);
+    m_timer->start(RESET_TIMEOUT);
     m_connected = false;
 }
 
 void DeviceObject::socketConnected(void)
 {
-    int descriptor = m_tcp->socketDescriptor(), keepAlive = 1, interval = 10, count = 3;
+    int descriptor = m_tcp->socketDescriptor(), keepAlive = 1, interval = 10, count = 2, timeout = 30000;
 
     setsockopt(descriptor, SOL_SOCKET, SO_KEEPALIVE, &keepAlive, sizeof(keepAlive));
     setsockopt(descriptor, SOL_TCP, TCP_KEEPIDLE, &interval, sizeof(interval));
     setsockopt(descriptor, SOL_TCP, TCP_KEEPINTVL, &interval, sizeof(interval));
     setsockopt(descriptor, SOL_TCP, TCP_KEEPCNT, &count, sizeof(count));
+    setsockopt(descriptor, SOL_TCP, TCP_USER_TIMEOUT, &timeout, sizeof(timeout));
 
     logInfo << this << "successfully connected to" << QString("%1:%2").arg(m_address.toString()).arg(m_port);
-    m_resetTimer->stop();
+    updateAvailability(Availability::Online);
+
+    m_timer->stop();
     m_connected = true;
     m_buffer.clear();
+
     getProperties();
 }
 
 void DeviceObject::socketDisconnected(void)
 {
+    logWarning << this << "disconnected";
     updateAvailability(Availability::Offline);
-    m_resetTimer->start(RESET_TIMEOUT);
+    m_timer->start(RESET_TIMEOUT);
     m_connected = false;
 }
 
@@ -475,18 +478,4 @@ void DeviceObject::readyRead(void)
 void DeviceObject::reset(void)
 {
     init();
-}
-
-void DeviceObject::update(void)
-{
-    qint64 now = QDateTime::currentMSecsSinceEpoch();
-
-    if (now > m_lastSeen + UNAVAILABLE_TIMEOUT)
-        updateAvailability(Availability::Offline);
-
-    if (now > m_lastSeen + PING_TIMEOUT && m_connected)
-    {
-        logDebug(m_debug) << this << "ping";
-        getProperties();
-    }
 }

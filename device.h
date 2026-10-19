@@ -2,8 +2,6 @@
 #define DEVICE_H
 
 #define RESET_TIMEOUT               10000
-#define PING_TIMEOUT                10000
-#define UNAVAILABLE_TIMEOUT         30000
 #define UPDATE_TIMEOUT              1000
 
 #define MULTICAST_ADDRESS           "239.255.255.250"
@@ -60,10 +58,10 @@ private:
     QString m_id, m_name;
     bool m_debug;
 
-    QTimer *m_resetTimer, *m_updateTimer;
-
     QTcpSocket *m_tcp;
     QUdpSocket *m_udp;
+
+    QTimer *m_timer;
 
     QHostAddress m_address;
     quint16 m_port;
@@ -74,7 +72,6 @@ private:
     bool m_bg, m_ceiling, m_ready, m_published, m_off;
 
     Availability m_availability;
-    qint64 m_lastSeen;
 
     QJsonArray m_exposes;
     QJsonObject m_options;
@@ -105,10 +102,9 @@ private slots:
     void socketError(QAbstractSocket::SocketError error);
     void socketConnected(void);
     void socketDisconnected(void);
-    void readyRead(void);
 
+    void readyRead(void);
     void reset(void);
-    void update(void);
 
 signals:
 
